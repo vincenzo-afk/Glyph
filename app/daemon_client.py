@@ -109,3 +109,32 @@ def _serialized():
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
+
+def ask(query: str, context: str) -> str:
+    """Send the extraction request; respawn the daemon ONLY if it is gone."""
+    if use_groq():
+        import groq_backend
+        return groq_backend.generate(query, context, cfg.MAX_CITATIONS)
+    payload = {"op": "generate", "query": query, "context": context}
+    with _serialized():
+        try:
+            return _request(payload, wait=2.0)["text"]
+        except DAEMON_DOWN:
+            _spawn_daemon()
+            return _request(payload, wait=cfg.DAEMON_WAIT)["text"]
+        except socket.timeout:
+            print("[daemon_client] daemon timed out mid-generation; not respawning",
+                  file=sys.stderr)
+            raise
+
+
+def vision_describe(image_path) -> str:
+    try:
+        if use_groq():
+            import groq_backend
+            return groq_backend.vision(image_path)
+        return _request({"op": "vision", "path": str(image_path)}, wait=2.0,
+                        timeout=cfg.VISION_TIMEOUT)["text"]
+    except Exception as e:
+        print(f"[daemon_client] vision failed for {image_path}: {e}", file=sys.stderr)
+        return ""
