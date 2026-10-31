@@ -95,3 +95,42 @@ def _bridges(answer_files: list, listed: list, retrieved: list, variants: list,
             out.append(f)
     return out
 
+
+def finalize(raw: dict, retrieved: list, cfg, query: str = "") -> tuple:
+    answer = normalize_answer(str(raw.get("answer", "")))
+    files = [f for f in (raw.get("files") or []) if isinstance(f, str)]
+    valid = {c["file"] for c in retrieved}
+    # Not capped yet: an over-citing model must not push the real files past the cap.
+    files = [f for f in dict.fromkeys(files) if f in valid]
+
+    if not answer:
+        return REFUSAL
+
+    # Evidence = the retrieved chunk text, grouped by file.
+    file_text: dict = {}
+    for c in retrieved:
+        file_text[c["file"]] = file_text.get(c["file"], "") + " " + _norm_text(c.get("text", ""))
+    stale = {c["file"] for c in retrieved if c.get("stale")}
+
+    variants = _variants(_norm_text(answer))
+    supporters = [f for f in files if _contains(file_text.get(f, ""), variants)]
+
+    if not supporters:
+        # Repair: any retrieved file that literally contains the value
+        # (current docs first). Else the answer is unsupported => refuse.
+        repair = [f for f in file_text if _contains(file_text[f], variants)]
+        repair.sort(key=lambda f: f in stale)
+        if not repair:
+            return REFUSAL
+        cited = repair[:1]
+        cited += _bridges(cited, files, retrieved, variants, stale, query)
+        return answer, cited[:cfg.MAX_CITATIONS], 0.6
+
+    final = supporters
+    if any(f not in stale for f in final):
+        final = [f for f in final if f not in stale]
+    if getattr(cfg, "PRUNE_REDUNDANT", True) and len(final) > 1:
+        final = final[:1]       # each file alone proves the answer: the rest are not necessary
+    final = final + _bridges(final, files, retrieved, variants, stale, query)
+    final = final[:cfg.MAX_CITATIONS]
+
