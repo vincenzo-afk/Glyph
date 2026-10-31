@@ -1,6 +1,6 @@
 import pytest
 
-from postprocess import _contains, _pattern, _variants
+from postprocess import _contains, _variants
 
 
 @pytest.mark.parametrize("token,want", [
