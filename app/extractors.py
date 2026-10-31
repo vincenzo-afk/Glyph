@@ -39,3 +39,54 @@ def _read_capped(p: Path, cap: int) -> bytes:
     with open(p, "rb") as fh:
         return fh.read(cap)
 
+
+def _looks_textual(raw: bytes) -> bool:
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff", b"\xef\xbb\xbf")):
+        return True
+    printable = sum(1 for b in raw if 32 <= b < 127 or b in (9, 10, 13) or b >= 0xA0)
+    return bool(raw) and b"\x00" not in raw and printable / len(raw) > 0.85
+
+
+def _mark_stale(path: str, text: str, markers) -> bool:
+    # Only the NAME and the first lines of the file count: a current doc may
+    # legitimately mention that an OLD revision was withdrawn inside its body
+    # (revision history), and must not be flagged itself.
+    # A line saying this doc SUPERSEDES another describes the other doc.
+    lines = [ln for ln in text.split("\n")[:3] if "SUPERSEDES" not in ln.upper()]
+    h = (path + "\n" + "\n".join(lines)).upper()
+    # Not \b: "_" is a word char, so \bWITHDRAWN\b misses r1_WITHDRAWN.pdf.
+    return any(re.search(r"(?<![A-Z])" + m + r"(?![A-Z])", h) for m in markers)
+
+
+def _read_pdf(p: Path, rel: str, markers) -> Extracted:
+    try:
+        r = PdfReader(str(p))
+        if r.is_encrypted:
+            try:
+                r.decrypt("")
+            except Exception:
+                return Extracted(rel, False, error="encrypted pdf")
+        text = " ".join((pg.extract_text() or "") for pg in r.pages)
+        if not text.strip():
+            return Extracted(rel, False, error="no extractable text (scanned/encrypted)")
+        return Extracted(rel, True, text=text,
+                         stale=_mark_stale(rel, text, markers))
+    except Exception as e:  # PasswordError lands here too
+        return Extracted(rel, False, error=f"pdf: {type(e).__name__}")
+
+
+def _read_docx(p: Path, rel: str, markers) -> Extracted:
+    try:
+        with zipfile.ZipFile(p) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+        # cells -> " | ", rows/paragraphs -> newline (tables-only docs stay readable)
+        xml = xml.replace("</w:tc>", " | ").replace("</w:p>", "\n").replace("</w:tr>", "\n")
+        text = html.unescape(re.sub(r"<[^>]+>", " ", xml))
+        text = re.sub(r"[ \t]+", " ", text)
+        if not text.strip(" |\n"):
+            return Extracted(rel, False, error="empty docx body")
+        return Extracted(rel, True, text=text,
+                         stale=_mark_stale(rel, text, markers))
+    except Exception as e:
+        return Extracted(rel, False, error=f"docx: {type(e).__name__}")
+
