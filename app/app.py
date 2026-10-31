@@ -37,3 +37,43 @@ def index(corpus: Path) -> None:
     except Exception as e:
         print(f"[index] WARNING: daemon ping failed after indexing: {e}", file=sys.stderr)
 
+
+def answer(corpus: Path, query: str):
+    query = (query or "")[:cfg.MAX_QUERY_CHARS]
+    if not tokenize(query):                      # "?", "...": nothing to retrieve on
+        return REFUSAL
+    chunks = load_chunks(cfg)
+    if not chunks:
+        return REFUSAL
+    top = retrieve(chunks, query, cfg)
+    if not top:
+        return REFUSAL
+    print(f"[{query[:60]}] top={[round(c['score'], 2) for c in top[:3]]}", file=sys.stderr)
+    # No absolute BM25 gate: score magnitude depends on corpus size and query
+    # length. The prompt tells the model to return an empty answer on
+    # insufficient evidence, and finalize() refuses unsupported answers.
+    context = "\n\n".join(
+        f"[FILE: {c['file']}]{' [WITHDRAWN/SUPERSEDED]' if c.get('stale') else ''}\n{c['text']}"
+        for c in top)
+    import daemon_client
+    raw_text = daemon_client.ask(query, context)
+    raw = parse_model_json(raw_text)
+    return finalize(raw, top, cfg, query)
+
+
+def write_output(query_id: str, text: str, citations, confidence) -> Path:
+    cfg.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = cfg.OUTPUT_DIR / (query_id + "_output.json")
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"answer": text, "citations": list(citations),
+                       "confidence": confidence}, fh, ensure_ascii=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(out)   # atomic: harness never reads a partial file
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return out
+
