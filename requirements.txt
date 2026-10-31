@@ -1,0 +1,12 @@
+pypdf>=4.2
+# pypdf needs this to open AES-encrypted PDFs; without it they fail differently.
+cryptography>=42
+openpyxl>=3.1
+pytesseract>=0.3.10
+transformers>=4.49,<5
+accelerate>=0.34
+Pillow>=10
+huggingface-hub>=0.26,<0.34
+# Must resolve against the base image's ROCm torch. Verify after build that
+# torch.version.hip is still set; a PyPI torch here would mean no AMD GPU.
+torchvision

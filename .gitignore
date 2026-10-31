@@ -1,0 +1,7 @@
+models/
+output/
+index/
+__pycache__/
+*.tmp
+.pytest_cache/
+.env

@@ -1,75 +1,58 @@
 # Glyph
 
-Pluggable OCR service that turns images into structured, confidence-scored text — with a web UI, REST API, and swappable recognition engines.
+Containerized RAG over a mixed-document corpus (pdf, docx, xlsx, csv, txt,
+log, py, png, jpg) that answers value-only questions and returns the exact
+corpus-relative files each answer comes from.
 
-## What it does
+Docs: [architecture](docs/ARCHITECTURE.md) · [contract map](docs/CONTRACT.md) ·
+[local model](docs/LOCAL_MODEL.md) · [troubleshooting](docs/TROUBLESHOOTING.md) ·
+[changelog](CHANGELOG.md)
 
-- Upload an image → get text back with per-line confidence and bounding boxes
-- Annotated preview in the browser: boxes color-coded by confidence, click a box to jump to its line
-- Three API modes: sync, async job polling, concurrent batch
-- Export to JSON, TXT, CSV, PDF
-- Preprocessing pipeline for skewed/noisy scans (deskew, denoise, threshold)
-- Swap engines via one query param — add a new engine by implementing one method
+## Pipeline
+1. `--index`  : start the GPU daemon (Qwen2.5-VL-7B, bf16, unix socket) and wait
+                for it -> resilient per-file parse -> chunk -> OCR + vision
+                descriptions for ALL images -> persist. The daemon stays resident.
+2. `--query`  : BM25 + entity hop (ticket IDs etc.) -> excerpts tagged by file ->
+                daemon extracts a value + files -> postprocess checks the value
+                against retrieved chunk text, strips units, demotes WITHDRAWN
+                docs, keeps only necessary citations, or refuses.
 
-## Engines
+## Layout
+`app/` is copied to `/app`; `tests/` runs without GPU, Docker or tesseract;
+`scripts/` holds the fetch, grade and full-check scripts.
 
-| Provider | Best for | Notes |
-|---|---|---|
-| Tesseract | Clean printed text | Default, CPU-only |
-| EasyOCR | Handwriting, multi-language | Heavier, GPU-friendly |
-| OpenAI (GPT-4o vision) | Hard/ambiguous images | Hosted, needs API key |
+## Make targets
+    make help                           # lists every target
+    make test                           # no GPU needed; also run in CI
 
-Check what's usable in your environment: `GET /api/v1/providers`
+## Build & test (Linux, AMD GPU, Docker)
+    make test                           # no GPU needed
+    ../mc3-starter-kit/setup.sh         # once: empty dir + chmod 000 case
+    make fetch                          # build-time only; eval has NO network
+    make build                          # system dep tesseract-ocr is in the Dockerfile
+    python3 ../mc3-starter-kit/selfcheck.py glyph:latest ../mc3-starter-kit/mc3-corpus
+    make grade                          # needs the GPU; shuts its daemon down afterwards
 
-## Quickstart
+Test the unreadable file for real with `docker run --cap-drop DAC_OVERRIDE ...`.
 
-```bash
-git clone [https://github.com/](https://github.com/)<you>/glyph.git
-cd glyph
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+## Environment
+`GLYPH_OUTPUT_DIR` (`/app/output`), `GLYPH_INDEX_DIR` (`/app/index`),
+`GLYPH_MODEL` (`/models/qwen2_5-vl-7b-instruct`).
 
-# Tesseract binary
-# macOS: brew install tesseract
-# Ubuntu: sudo apt-get install tesseract-ocr
+## Development without a GPU
+`GLYPH_BACKEND=groq` sends model calls to Groq, reading `GROQ_API_KEY` from the
+environment or an untracked `.env`:
 
-uvicorn app.main:app --reload
-# UI: http://localhost:8000
-# Swagger docs: http://localhost:8000/docs
-```
+    GLYPH_BACKEND=groq python scripts/grade_local.py ../mc3-starter-kit/mc3-corpus
 
-Or zero local setup:
+Never use it for the submission: evaluation has no network and needs GPU use.
+The default backend is the local daemon.
 
-```bash
-docker compose up --build
-```
-
-## API
-
-```bash
-# Sync
-curl -F "file=@samples/sample.png" http://localhost:8000/api/v1/ocr
-
-# Async job
-curl -F "file=@samples/sample.png" http://localhost:8000/api/v1/ocr/async
-curl http://localhost:8000/api/v1/jobs/<job_id>
-
-# Batch
-curl -F "files=@a.png" -F "files=@b.png" http://localhost:8000/api/v1/ocr/batch
-```
-
-## Testing
-
-```bash
-pytest
-```
-
-## Architecture
-
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the provider plugin system and how to add a new engine.
-
-## Known limits
-
-- In-memory job store resets on restart (Redis is the documented upgrade path)
-- Tesseract is weak on handwriting — use EasyOCR or the OpenAI provider for that
-- No image persistence: images are processed in memory, never stored
+## Contract notes
+- Output: /app/output/<query-id>_output.json, written atomically.
+- Per-query cost is a socket round-trip; the model is never reloaded.
+  A timeout never respawns the daemon; re-running `--index` reuses it.
+- Encrypted PDFs, unreadable files, unknown binaries and empty dirs are
+  skipped per-file and recorded in /app/index/manifest.json.
+- Refusal is ("", [], 0.0) -- never prose. A failed query also writes a refusal.
+- Image size: base 29.2 GiB + ~16 GiB bf16 weights + deps = ~47 GiB < 60 GiB.

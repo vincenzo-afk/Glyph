@@ -1,0 +1,20 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Only what the tests import. torch, transformers and the ROCm base image
+      # are needed for the GPU run, not for these tests.
+      - name: Install test dependencies
+        run: pip install pypdf openpyxl pillow cryptography pytesseract pytest
+      - name: Run tests
+        run: python -m pytest tests -q
