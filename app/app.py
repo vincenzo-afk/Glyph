@@ -77,3 +77,33 @@ def write_output(query_id: str, text: str, citations, confidence) -> Path:
             tmp.unlink()
     return out
 
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--index", type=Path)
+    ap.add_argument("--corpus", type=Path)
+    ap.add_argument("--query-id")
+    ap.add_argument("--query")
+    args = ap.parse_args()
+
+    if args.index is not None:
+        index(args.index)
+        return 0
+    if args.corpus is None or args.query is None or not args.query_id:
+        ap.error("a query needs --corpus, --query-id and --query")
+
+    try:
+        text, citations, confidence = answer(args.corpus, args.query)
+    except Exception as e:      # a failed answer is still a well-formed refusal
+        print(f"[query] failed, refusing: {type(e).__name__}: {e}", file=sys.stderr)
+        text, citations, confidence = REFUSAL
+    try:
+        write_output(args.query_id, text, citations, confidence)
+    except OSError as e:
+        print(f"[query] cannot write output: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
