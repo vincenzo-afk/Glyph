@@ -55,3 +55,57 @@ def _request(payload: dict, wait: float, timeout: float = None) -> dict:
         finally:
             s.close()
 
+
+def _spawn_daemon():
+    cfg.DAEMON_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg.DAEMON_LOG, "ab") as log:
+        return subprocess.Popen([sys.executable, str(HERE / "daemon.py")],
+                                stdout=log, stderr=log, start_new_session=True,
+                                cwd=str(HERE))
+
+
+def ensure_daemon(wait: float) -> bool:
+    """Idempotent: reuse a live daemon, else spawn one and wait for /ping."""
+    if use_groq():
+        return True
+    try:
+        _request({"op": "ping"}, wait=0.0)
+        return True
+    except Exception:
+        pass
+    proc = _spawn_daemon()
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            _request({"op": "ping"}, wait=0.0)
+            return True
+        except Exception:
+            if proc.poll() is not None:     # died: OOM, bad model dir, or lost the lock race
+                try:
+                    _request({"op": "ping"}, wait=1.0)   # a sibling daemon may own the socket
+                    return True
+                except Exception:
+                    return False
+            time.sleep(0.5)
+    return False
+
+
+@contextlib.contextmanager
+def _serialized():
+    """Cross-process lock so parallel harness invocations cannot race the daemon."""
+    if fcntl is None:
+        yield
+        return
+    try:
+        cfg.LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(cfg.LOCK_PATH, "a")
+    except OSError:
+        yield
+        return
+    with fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
