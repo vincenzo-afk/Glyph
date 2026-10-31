@@ -88,3 +88,44 @@ def test_daemon_failure_still_writes_refusal(corpus, cfg, daemon_up, monkeypatch
     run(monkeypatch, "--corpus", str(corpus), "--query-id", "q1", "--query", "junction temperature")
     assert json.loads((cfg.OUTPUT_DIR / "q1_output.json").read_text())["answer"] == ""
 
+
+def test_query_before_index_refuses(tmp_path, cfg, monkeypatch):
+    run(monkeypatch, "--corpus", str(tmp_path), "--query-id", "q1", "--query", "anything")
+    assert json.loads((cfg.OUTPUT_DIR / "q1_output.json").read_text())["answer"] == ""
+
+
+def test_same_query_id_twice_overwrites(cfg):
+    app_mod.write_output("q", "1", [], 0.5)
+    app_mod.write_output("q", "2", [], 0.5)
+    assert json.loads((cfg.OUTPUT_DIR / "q_output.json").read_text())["answer"] == "2"
+
+
+def test_failed_write_leaves_previous_output_intact(cfg, monkeypatch):
+    app_mod.write_output("q", "good", [], 0.5)
+    def die(*a):
+        raise OSError("disk")
+    monkeypatch.setattr(app_mod.os, "fsync", die)
+    with pytest.raises(OSError):
+        app_mod.write_output("q", "bad", [], 0.5)
+    assert json.loads((cfg.OUTPUT_DIR / "q_output.json").read_text())["answer"] == "good"
+    assert not list(cfg.OUTPUT_DIR.glob("*.tmp"))
+
+
+def test_readonly_output_returns_error_not_traceback(corpus, cfg, daemon_up, monkeypatch):
+    run(monkeypatch, "--index", str(corpus))
+    monkeypatch.setattr(daemon_client, "ask", lambda q, c: "{}")
+    def deny(*a, **k):
+        raise PermissionError
+    monkeypatch.setattr(app_mod, "write_output", deny)
+    assert run(monkeypatch, "--corpus", str(corpus), "--query-id", "q", "--query", "junction") == 1
+
+
+# --- The kit's real corpus and questions, with the model replaced by an oracle.
+# This scores everything EXCEPT model quality: parsing, retrieval, hop, citations.
+# Vision text is stubbed with the values the model must read off the two images.
+VISION = {"backplane_pinout.png": "Backplane pinout TQ-40: pin B14 THERM_ALERT#",
+          "asset_label.jpg": "Asset label: board revision REV-C2"}
+SAMPLE = None
+if (KIT / "sample-questions.json").exists():
+    SAMPLE = json.loads((KIT / "sample-questions.json").read_text(encoding="utf-8"))["queries"]
+
