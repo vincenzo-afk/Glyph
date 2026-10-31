@@ -129,3 +129,41 @@ SAMPLE = None
 if (KIT / "sample-questions.json").exists():
     SAMPLE = json.loads((KIT / "sample-questions.json").read_text(encoding="utf-8"))["queries"]
 
+
+@pytest.fixture
+def kit_chunks(cfg, monkeypatch, fake_tesseract):
+    if SAMPLE is None:
+        pytest.skip("starter kit not present")
+    monkeypatch.setattr(daemon_client, "vision_describe",
+                        lambda p: VISION.get(p.name, ""))
+    app_mod.build_index(KIT / "mc3-corpus", cfg)
+    return cfg
+
+
+@pytest.mark.parametrize("n", range(1, 11))
+@pytest.mark.parametrize("cite_all", [False, True], ids=["model-exact", "model-overcites"])
+def test_kit_questions_with_oracle_model(kit_chunks, monkeypatch, n, cite_all):
+    q = next(x for x in SAMPLE if x["n"] == n)
+    seen = {}
+    def oracle(query, context):
+        seen["context"] = context
+        files = q["expected_citations"]
+        if cite_all:
+            import re
+            files = re.findall(r"\[FILE: ([^\]]+)\]", context)
+        return json.dumps({"answer": q["expected_answer"], "files": files})
+    monkeypatch.setattr(daemon_client, "ask", oracle)
+    a, cites, _ = app_mod.answer(KIT / "mc3-corpus", q["query"])
+    assert a == q["expected_answer"]
+    assert set(cites) == set(q["expected_citations"])
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 6, 7, 8, 9])
+def test_kit_evidence_reaches_the_model(kit_chunks, monkeypatch, n):
+    q = next(x for x in SAMPLE if x["n"] == n)
+    seen = {}
+    monkeypatch.setattr(daemon_client, "ask", lambda query, c: seen.update(c=c) or "{}")
+    app_mod.answer(KIT / "mc3-corpus", q["query"])
+    for f in q["expected_citations"]:
+        assert f"[FILE: {f}]" in seen["c"]
+    assert q["expected_answer"] in seen["c"]
