@@ -20,7 +20,7 @@ import app as app_mod  # noqa: E402
 
 
 def norm(s: str) -> str:
-    s = (s or "").strip().lower().replace("\u00b0", "")
+    s = (s or "").strip().lower().replace("\u00b0", " ")
     for u in (" c", " degrees", " seconds", "s"):
         if s.endswith(u):
             s = s[: -len(u)]
