@@ -134,3 +134,6 @@ def finalize(raw: dict, retrieved: list, cfg, query: str = "") -> tuple:
     final = final + _bridges(final, files, retrieved, variants, stale, query)
     final = final[:cfg.MAX_CITATIONS]
 
+    top = retrieved[0]["score"] if retrieved else 0.0
+    confidence = min(0.99, 0.5 + top * 0.1)
+    return answer, final, round(max(0.05, confidence), 2)
