@@ -15,7 +15,6 @@ from pathlib import Path
 _td = tempfile.TemporaryDirectory()
 os.environ["GLYPH_INDEX_DIR"] = _td.name
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
-import config as cfg  # noqa: E402
 import app as app_mod  # noqa: E402
 
 
