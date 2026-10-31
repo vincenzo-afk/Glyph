@@ -83,3 +83,58 @@ def _single_instance():
         raise SystemExit("another daemon already owns " + str(cfg.DAEMON_LOCK_PATH))
     return fh
 
+
+def _log(msg: str) -> None:
+    try:
+        with open(cfg.DAEMON_LOG, "a") as log:
+            log.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass                        # full/unwritable log must never kill the daemon
+
+
+def serve():
+    import socket
+    cfg.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    if not (cfg.MODEL_DIR / "config.json").exists():
+        raise SystemExit(f"model not found: {cfg.MODEL_DIR}/config.json "
+                         "(set GLYPH_MODEL; see scripts/fetch_model.sh)")
+    lock = _single_instance()       # noqa: F841  (kept referenced for process lifetime)
+    if cfg.SOCKET_PATH.exists():
+        cfg.SOCKET_PATH.unlink()
+    _load_pipe()                      # model is on the GPU before we listen
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(cfg.SOCKET_PATH))
+    srv.listen(4)
+    _log("daemon up")
+    running = True
+    while running:
+        try:
+            conn, _ = srv.accept()
+        except OSError as e:
+            if e.errno in (errno.EINTR, errno.EAGAIN):
+                continue
+            _log(f"accept failed: {e}")
+            break
+        with conn:
+            conn.settimeout(60.0)   # a client that connects and goes silent must not wedge us
+            try:
+                req = json.loads(conn.makefile("rb").readline())
+                if req.get("op") == "ping":
+                    resp = {"ok": True}
+                elif req.get("op") == "shutdown":
+                    resp, running = {"ok": True}, False
+                elif req.get("op") == "vision":
+                    resp = {"ok": True, "text": vision_describe(req["path"])}
+                else:
+                    resp = {"ok": True, **generate(req["query"], req["context"])}
+            except Exception as e:
+                resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            try:
+                conn.sendall((json.dumps(resp) + "\n").encode())
+            except OSError:
+                pass
+    try:
+        cfg.SOCKET_PATH.unlink()
+    except OSError:
+        pass
+
