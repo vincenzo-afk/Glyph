@@ -1,5 +1,11 @@
 **/__pycache__/
 **/*.pyc
 .git/
+.github/
+docs/
+tests/
+scripts/
 models/*.tmp
 .env
+.pytest_cache/
+requirements-dev.txt
