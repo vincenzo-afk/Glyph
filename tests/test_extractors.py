@@ -81,3 +81,25 @@ def test_misdetected_type(tmp_path):
     assert "94" in ex(tmp_path / "a.txt").text
     assert "7" in ex(tmp_path / "b.docx").text
 
+
+def test_permission_denied(tmp_path, monkeypatch):
+    # Faked: chmod is a no-op on Windows and for root. The kit requires a real
+    # run on Linux with --cap-drop DAC_OVERRIDE as well.
+    import extractors
+    p = tmp_path / "a.txt"
+    p.write_text("x")
+    def deny(*a):
+        raise PermissionError
+    monkeypatch.setattr(extractors, "_read_capped", deny)
+    assert ex(p).error == "permission denied"
+
+
+@pytest.mark.parametrize("path,text,want", [
+    ("specs/r1_WITHDRAWN.pdf", "x", True),      # "_" must not hide the marker
+    ("a.txt", "Revision 1 - WITHDRAWN", True),
+    ("a.txt", "Datasheet, revision 2 - supersedes revision 1", False),
+    ("a.txt", "this doc supersedes the WITHDRAWN X", False),
+    ("a.txt", "a\nb\nc\nRevision 1 is withdrawn.", False),
+])
+def test_stale(path, text, want):
+    assert _mark_stale(path, text, config.STALE_MARKERS) is want
