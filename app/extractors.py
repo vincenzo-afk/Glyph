@@ -130,3 +130,56 @@ def _read_csv(p: Path, rel: str, markers) -> Extracted:
     except Exception as e:
         return Extracted(rel, False, error=f"csv: {type(e).__name__}")
 
+
+def _read_text(p: Path, rel: str, markers) -> Extracted:
+    try:
+        text = _decode(_read_capped(p, MAX_BYTES))
+        return Extracted(rel, True, text=text,
+                         stale=_mark_stale(rel, text, markers))
+    except Exception as e:
+        return Extracted(rel, False, error=f"text: {type(e).__name__}")
+
+
+def extract_file(p: Path, corpus_root: Path, cfg) -> Extracted:
+    """Dispatch by suffix; unknown binaries and permission errors are data,
+    not exceptions that abort the walk."""
+    global MAX_BYTES
+    MAX_BYTES = getattr(cfg, "MAX_FILE_BYTES", MAX_BYTES)
+    rel = p.relative_to(corpus_root).as_posix()
+    suf = p.suffix.lower()
+    try:
+        size = p.stat().st_size
+        if size == 0:
+            return Extracted(rel, False, error="empty file")
+        head = _read_capped(p, 8192)
+        is_text_suffix = suf in cfg.TEXT_SUFFIXES or not suf
+        if size > MAX_BYTES and not is_text_suffix:
+            return Extracted(rel, False, error="file too large")
+
+        # Misdetected type: trust the magic bytes over the suffix.
+        if head.startswith(b"%PDF") and suf != ".pdf":
+            suf = ".pdf"
+        if suf == ".pdf":
+            res = _read_pdf(p, rel, cfg.STALE_MARKERS)
+        elif suf == ".docx":
+            res = _read_docx(p, rel, cfg.STALE_MARKERS)
+        elif suf == ".xlsx":
+            res = _read_xlsx(p, rel, cfg.STALE_MARKERS)
+        elif suf in cfg.IMAGE_SUFFIXES:
+            from ocr import ocr_image
+            return ocr_image(p, rel, cfg)
+        elif suf == ".csv":
+            return _read_csv(p, rel, cfg.STALE_MARKERS)
+        elif is_text_suffix:
+            return _read_text(p, rel, cfg.STALE_MARKERS)
+        else:
+            if _looks_textual(head):
+                return _read_text(p, rel, cfg.STALE_MARKERS)
+            return Extracted(rel, False, error="unsupported binary type")
+        if not res.ok and suf != ".pdf" and _looks_textual(head):
+            return _read_text(p, rel, cfg.STALE_MARKERS)   # e.g. a .docx that is really text
+        return res
+    except PermissionError:
+        return Extracted(rel, False, error="permission denied")
+    except Exception as e:
+        return Extracted(rel, False, error=f"{type(e).__name__}: {e}")
