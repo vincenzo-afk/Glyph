@@ -120,3 +120,15 @@ def test_serve_survives_eintr(cfg, tmp_path, monkeypatch):
     daemon.serve()
     assert srv.accepts == 2         # EINTR retried; EBADF ended the loop
 
+
+def test_serve_refuses_missing_model(cfg, tmp_path, monkeypatch):
+    # Regression P0-4.
+    monkeypatch.setattr(config, "MODEL_DIR", tmp_path / "nope")
+    with pytest.raises(SystemExit):
+        daemon.serve()
+
+
+def test_default_model_dir_matches_fetch_script():
+    from pathlib import Path
+    fetch = (Path(daemon.__file__).parents[1] / "scripts" / "fetch_model.sh").read_text()
+    assert config.MODEL_DIR.name in fetch
