@@ -90,3 +90,43 @@ def _read_docx(p: Path, rel: str, markers) -> Extracted:
     except Exception as e:
         return Extracted(rel, False, error=f"docx: {type(e).__name__}")
 
+
+def _read_xlsx(p: Path, rel: str, markers) -> Extracted:
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(str(p), read_only=True, data_only=True)
+        lines = []
+        for ws in wb.worksheets:
+            lines.append(f"[sheet {ws.title}]")
+            for row in ws.iter_rows(values_only=True):
+                cells = ["" if c is None else str(c) for c in row]
+                if any(cells):
+                    lines.append(" | ".join(cells))
+        wb.close()
+        text = "\n".join(lines)
+        return Extracted(rel, True, text=text,
+                         stale=_mark_stale(rel, text, markers))
+    except Exception as e:
+        return Extracted(rel, False, error=f"xlsx: {type(e).__name__}")
+
+
+def _read_csv(p: Path, rel: str, markers) -> Extracted:
+    try:
+        text = _decode(_read_capped(p, MAX_BYTES))
+        try:
+            rows = list(csv.reader(io.StringIO(text)))
+            if rows and len(rows[0]) > 1:
+                header = rows[0]
+                lines = [" | ".join(header)]
+                for r in rows[1:]:
+                    cells = [f"{h}: {v}" if v else h for h, v in zip(header, r)]
+                    cells += r[len(header):]        # ragged rows keep their extra cells
+                    lines.append(" | ".join(cells))
+                text = "\n".join(lines)
+        except Exception:
+            pass
+        return Extracted(rel, True, text=text,
+                         stale=_mark_stale(rel, text, markers))
+    except Exception as e:
+        return Extracted(rel, False, error=f"csv: {type(e).__name__}")
+
