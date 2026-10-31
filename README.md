@@ -37,3 +37,14 @@ environment or an untracked `.env`:
 
     GLYPH_BACKEND=groq python scripts/grade_local.py ../mc3-starter-kit/mc3-corpus
 
+Never use it for the submission: evaluation has no network and needs GPU use.
+The default backend is the local daemon.
+
+## Contract notes
+- Output: /app/output/<query-id>_output.json, written atomically.
+- Per-query cost is a socket round-trip; the model is never reloaded.
+  A timeout never respawns the daemon; re-running `--index` reuses it.
+- Encrypted PDFs, unreadable files, unknown binaries and empty dirs are
+  skipped per-file and recorded in /app/index/manifest.json.
+- Refusal is ("", [], 0.0) -- never prose. A failed query also writes a refusal.
+- Image size: base 29.2 GiB + ~16 GiB bf16 weights + deps = ~47 GiB < 60 GiB.
