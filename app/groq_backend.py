@@ -55,3 +55,25 @@ def _chat(body: dict, budget: float) -> str:
             print(f"[groq] {e.code}, retrying in {delay}s", file=sys.stderr)
             time.sleep(delay)
 
+
+def generate(query: str, context: str, max_citations: int) -> str:
+    from prompts import EXTRACTION_PROMPT, MODEL_SYSTEM
+    prompt = EXTRACTION_PROMPT.format(query=query, context=context, max_c=max_citations)
+    return _chat({"model": TEXT_MODEL, "temperature": 0, "max_completion_tokens": 2048,
+                  "messages": [{"role": "system", "content": MODEL_SYSTEM},
+                               {"role": "user", "content": prompt}]}, ASK_BUDGET)
+
+
+def vision(image_path) -> str:
+    from PIL import Image
+    from prompts import VISION_PROMPT
+    img = Image.open(image_path).convert("RGB")
+    img.thumbnail((2000, 2000))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    return _chat({"model": VISION_MODEL, "temperature": 0, "max_completion_tokens": 2048,
+                  "messages": [{"role": "user", "content": [
+                      {"type": "text", "text": VISION_PROMPT},
+                      {"type": "image_url", "image_url": {"url": url}}]}]},
+                 VISION_BUDGET).strip()
