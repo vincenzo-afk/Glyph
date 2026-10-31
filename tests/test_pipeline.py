@@ -42,3 +42,49 @@ def test_daemon_is_up_before_the_vision_pass(tmp_path, cfg, monkeypatch):
     run(monkeypatch, "--index", str(tmp_path))
     assert order == ["daemon", "index"]
 
+
+def test_answerable(corpus, cfg, daemon_up, monkeypatch):
+    run(monkeypatch, "--index", str(corpus))
+    reply = '{"answer": "94 C", "files": ["specs/sheet_r2.pdf"], "why": "x"} trailing prose'
+    out, seen = query(monkeypatch, cfg, corpus, "What is the maximum junction temperature?", reply)
+    assert out["answer"] == "94" and out["citations"] == ["specs/sheet_r2.pdf"]
+    assert "[FILE: specs/sheet_r2.pdf]" in seen["context"]
+    assert "[WITHDRAWN/SUPERSEDED]" in seen["context"]
+    assert not list(cfg.OUTPUT_DIR.glob("*.tmp"))
+
+
+def test_unanswerable_refusal_shape(corpus, cfg, daemon_up, monkeypatch):
+    run(monkeypatch, "--index", str(corpus))
+    out, _ = query(monkeypatch, cfg, corpus, "What is the maximum junction temperature?",
+                   '{"answer": "", "files": []}')
+    assert out == {"answer": "", "citations": [], "confidence": 0.0}
+
+
+def test_citation_outside_retrieved_is_dropped(corpus, cfg, daemon_up, monkeypatch):
+    run(monkeypatch, "--index", str(corpus))
+    out, _ = query(monkeypatch, cfg, corpus, "What is the maximum junction temperature?",
+                   '{"answer": "94", "files": ["/etc/passwd"]}')
+    assert out["citations"] == ["specs/sheet_r2.pdf"]
+
+
+@pytest.mark.parametrize("q", ["?", "...", ""])
+def test_tokenless_query_refuses_without_model(corpus, cfg, daemon_up, monkeypatch, q):
+    run(monkeypatch, "--index", str(corpus))
+    out, seen = query(monkeypatch, cfg, corpus, q)
+    assert out["answer"] == "" and not seen
+
+
+def test_very_long_query(corpus, cfg, daemon_up, monkeypatch):
+    run(monkeypatch, "--index", str(corpus))
+    out, seen = query(monkeypatch, cfg, corpus, "junction " * 20000, '{"answer": ""}')
+    assert out["citations"] == [] and seen
+
+
+def test_daemon_failure_still_writes_refusal(corpus, cfg, daemon_up, monkeypatch):
+    run(monkeypatch, "--index", str(corpus))
+    def boom(q, c):
+        raise TimeoutError
+    monkeypatch.setattr(daemon_client, "ask", boom)
+    run(monkeypatch, "--corpus", str(corpus), "--query-id", "q1", "--query", "junction temperature")
+    assert json.loads((cfg.OUTPUT_DIR / "q1_output.json").read_text())["answer"] == ""
+
