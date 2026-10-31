@@ -37,3 +37,45 @@ def test_stale_kept_when_only_support():
     assert finalize({"answer": "94", "files": ["r1_WITHDRAWN.pdf"]}, top, config)[1] == ["r1_WITHDRAWN.pdf"]
 
 
+@pytest.mark.parametrize("raw", [
+    {"answer": "6412", "files": ["a.txt"]},      # hallucinated
+    {"answer": "", "files": ["a.txt"]},          # never citations without an answer
+    {},
+])
+def test_refusal_shape(raw):
+    assert finalize(raw, [chunk("a.txt", "limit 94")], config) == REFUSAL
+
+
+@pytest.mark.parametrize("text", ["year 1940", "ratio 94.5", "x94"])
+def test_support_needs_whole_token(text):
+    assert finalize({"answer": "94", "files": ["a"]}, [chunk("a", text)], config) == REFUSAL
+
+
+def test_decimal_variant_supported():
+    assert finalize({"answer": "94.0", "files": ["a"]}, [chunk("a", "limit 94 C")], config)[1] == ["a"]
+
+
+def test_case_insensitive_support():
+    assert finalize({"answer": "rev-c2", "files": ["a"]}, [chunk("a", "Board REV-C2")], config)[0] == "rev-c2"
+
+
+def test_redundant_file_not_cited():
+    top = [chunk("a", "limit 94"), chunk("b", "also 94")]
+    assert finalize({"answer": "94", "files": ["a", "b"]}, top, config)[1] == ["a"]
+
+
+def test_uncited_supporter_repaired():
+    top = [chunk("a", "nothing"), chunk("b", "limit 94")]
+    assert finalize({"answer": "94", "files": ["a"]}, top, config)[1] == ["b"]
+
+
+LOG = "incident logged against ORR-1847"
+ROW = "ticket: ORR-1847 | fixed_in: 4.3.2\nticket: ORR-1904 | note: 4.3.2 list"
+
+
+def test_multi_hop_keeps_listed_bridge():
+    top = [chunk("x.log", LOG, 9), chunk("bugs.csv", ROW, 1)]
+    q = "The log shows an incident. Which release fixed it?"
+    raw = {"answer": "4.3.2", "files": ["x.log", "bugs.csv"]}
+    assert set(finalize(raw, top, config, q)[1]) == {"x.log", "bugs.csv"}
+
