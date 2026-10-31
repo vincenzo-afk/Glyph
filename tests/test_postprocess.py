@@ -79,3 +79,20 @@ def test_multi_hop_keeps_listed_bridge():
     raw = {"answer": "4.3.2", "files": ["x.log", "bugs.csv"]}
     assert set(finalize(raw, top, config, q)[1]) == {"x.log", "bugs.csv"}
 
+
+def test_multi_hop_adds_bridge_the_model_missed():
+    top = [chunk("x.log", LOG, 9), chunk("bugs.csv", ROW, 1)]
+    raw = {"answer": "4.3.2", "files": ["bugs.csv"]}
+    assert set(finalize(raw, top, config, "The log shows an incident. Which release?")[1]) == {"x.log", "bugs.csv"}
+
+
+def test_single_hop_drops_log_when_ticket_is_in_question():
+    # The question already names the ticket: the log is not necessary.
+    top = [chunk("x.log", LOG, 9), chunk("bugs.csv", ROW, 1)]
+    raw = {"answer": "4.3.2", "files": ["x.log", "bugs.csv"]}
+    assert finalize(raw, top, config, "Which version fixed ORR-1847?")[1] == ["bugs.csv"]
+
+
+def test_unrelated_listed_file_dropped():
+    top = [chunk("a", "fan cost is 7"), chunk("b", "limit 94")]
+    assert finalize({"answer": "94", "files": ["a", "b"]}, top, config)[1] == ["b"]
